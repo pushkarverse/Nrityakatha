@@ -6,6 +6,10 @@ Nritya Katha is a website-first VR and AI platform for preserving, teaching, and
 
 The project is designed to make cultural learning more accessible without requiring a VR headset. Desktop and mobile experiences are core modes; WebXR is an optional immersive layer.
 
+## Live Demo
+
+[Open the deployed Nritya Katha experience](https://pushkarverse.github.io/Nrityakatha/)
+
 ## Current Prototype
 
 The current prototype is a self-contained A-Frame scene in [`src/index.html`](src/index.html). It includes:
