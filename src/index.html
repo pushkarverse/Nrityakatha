@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Nritya Katha - VR Experience</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.0.0/dist/aframe-extras.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+
+    <style>
+        body, html { margin: 0; padding: 0; overflow: hidden; background-color: #000; }
+        .webcam-container { position: absolute; top: -1000px; left: -1000px; width: 1px; height: 1px; overflow: hidden; }
+        #loading-screen { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: radial-gradient(circle at center, #17495b 0%, #07151d 72%); color: #f5d98a; font-family: Georgia, serif; transition: opacity 500ms ease, visibility 500ms ease; }
+        #loading-screen.is-hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+        .loading-card { text-align: center; }
+        .loading-mark { width: 56px; height: 56px; margin: 0 auto 18px; border: 2px solid rgba(245, 217, 138, 0.3); border-top-color: #f5d98a; border-radius: 50%; animation: loading-spin 1s linear infinite; }
+        .loading-title { margin: 0; font-size: 26px; letter-spacing: 0.04em; }
+        .loading-status { margin: 8px 0 0; color: #c4d6d8; font: 13px sans-serif; }
+        @keyframes loading-spin { to { transform: rotate(360deg); } }
+    </style>
+
+    <script>
+        const STATE = {
+            currentLocation: 'museum-hub',
+            isPracticing: false,
+            latestLandmarks: null
+        };
+
+        const AIPipeline = {
+            init: function() {
+                const videoElement = document.getElementById('input_video');
+                const pose = new Pose({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`});
+                pose.setOptions({
+                    modelComplexity: 1, smoothLandmarks: true, enableSegmentation: false,
+                    smoothSegmentation: false, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5
+                });
+                pose.onResults(this.onResults.bind(this));
+                this.camera = new Camera(videoElement, { onFrame: async () => { await pose.send({image: videoElement}); }, width: 640, height: 480 });
+            },
+            startTracking: function() { if(this.camera) this.camera.start(); },
+            stopTracking: function() { if(this.camera) this.camera.stop(); },
+            onResults: function(results) {
+                if (!results.poseWorldLandmarks) return;
+                STATE.latestLandmarks = results.poseWorldLandmarks;
+            }
+        };
+
+        AFRAME.registerComponent('scene-manager', {
+            init: function() { AIPipeline.init(); }
+        });
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const scene = document.querySelector('a-scene');
+            const loadingScreen = document.getElementById('loading-screen');
+            const hideLoadingScreen = () => loadingScreen.classList.add('is-hidden');
+            scene.addEventListener('loaded', hideLoadingScreen, {once: true});
+            setTimeout(hideLoadingScreen, 6000);
+        });
+
+        // ==========================================
+        // VR COMFORT TELEPORT & DOOR ANIMATION
+        // ==========================================
+        AFRAME.registerComponent('room-portal', {
+            schema: { targetPosition: {type: 'vec3'}, doorColor: {type: 'color', default: '#3E2723'}, label: {type: 'string', default: 'Enter Room'} },
+            init: function() {
+                this.isInteriorExit = this.data.label.includes('Return') || this.data.label.includes('Museum Hub');
+                this.doorPivot = document.createElement('a-entity');
+                this.doorPivot.setAttribute('position', '-0.8 0 0');
+
+                this.doorMesh = document.createElement('a-box');
+                this.doorMesh.setAttribute('width', '1.6'); this.doorMesh.setAttribute('height', '2.5'); this.doorMesh.setAttribute('depth', '0.1');
+                this.doorMesh.setAttribute('position', '0.8 1.25 0'); this.doorMesh.setAttribute('color', this.data.doorColor); this.doorMesh.classList.add('clickable');
+                this.doorPivot.appendChild(this.doorMesh);
+                this.el.appendChild(this.doorPivot);
+                
+                const frame = document.createElement('a-entity');
+                frame.setAttribute('geometry', 'primitive: box; width: 1.8; height: 2.7; depth: 0.05');
+                frame.setAttribute('material', 'color: #D4AF37; emissive: #D4AF37; emissiveIntensity: 0.3');
+                frame.setAttribute('position', '0 1.35 -0.05');
+                this.el.appendChild(frame);
+
+                const label = document.createElement('a-text');
+                label.setAttribute('value', this.data.label); label.setAttribute('align', 'center'); label.setAttribute('position', '0 0.5 0.06');
+                label.setAttribute('scale', '0.5 0.5 0.5'); label.setAttribute('color', '#FFF');
+                this.doorMesh.appendChild(label);
+
+                this.doorMesh.addEventListener('mouseenter', () => this.doorMesh.setAttribute('color', '#5D4037'));
+                this.doorMesh.addEventListener('mouseleave', () => this.doorMesh.setAttribute('color', this.data.doorColor));
+
+                this.doorMesh.addEventListener('click', () => {
+                    if (this.isAnimating) return;
+                    this.isAnimating = true;
+                    const rig = document.getElementById('rig');
+                    const fadeSphere = document.getElementById('fade-sphere');
+                    const swing = this.isInteriorExit ? 100 : -100;
+
+                    this.doorPivot.setAttribute('animation__open', `property: rotation; to: 0 ${swing} 0; dur: 800; easing: easeInOutQuad`);
+                    setTimeout(() => {
+                        fadeSphere.emit('fadeout');
+                        setTimeout(() => {
+                            rig.setAttribute('position', this.data.targetPosition);
+                            if (this.data.label.includes("Museum Hub") && STATE.isPracticing) {
+                                const practiceBtn = document.getElementById('practice-button');
+                                if(practiceBtn) practiceBtn.emit('stop-practice');
+                            }
+                            
+                            fadeSphere.emit('fadein');
+                            
+                            this.doorPivot.removeAttribute('animation__open');
+                            this.doorPivot.setAttribute('rotation', '0 0 0');
+                            this.isAnimating = false;
+                        }, 450); 
+                    }, 850); 
+                });
+            }
+        });
+
+        // ==========================================
+        // VIRTUAL MASTER & JUST DANCE MECHANICS
+        // ==========================================
+        AFRAME.registerComponent('reference-dancer', {
+            init: function() {
+                // Use the actual GLTF 3D model and use animation-mixer to play its built-in animation
+                this.model = document.createElement('a-entity');
+                this.model.setAttribute('gltf-model', '#dummy-model');
+                this.model.setAttribute('scale', '1.1 1.1 1.1');
+                this.model.setAttribute('animation-mixer', 'clip: *; loop: repeat');
+                this.el.appendChild(this.model);
+                this.time = 0;
+            },
+            tick: function(time, delta) {
+                this.time += delta;
+                
+                // Store simulated state for Rhythm Coach to read
+                const simulatedArmRot = Math.sin(this.time / 200) * 50;
+                this.el.setAttribute('data-pose', JSON.stringify({ leftArmRot: simulatedArmRot, rightArmRot: -simulatedArmRot }));
+            }
+        });
+
+        AFRAME.registerComponent('rhythm-coach', {
+            init: function() { this.lastFeedbackTime = 0; },
+            tick: function(time) {
+                if(!STATE.isPracticing || !STATE.latestLandmarks) return;
+                if(time - this.lastFeedbackTime < 2500) return; // Spawn feedback every 2.5s
+                
+                const refDancer = document.getElementById('ref-master');
+                if(!refDancer) return;
+                const refPoseStr = refDancer.getAttribute('data-pose');
+                if(!refPoseStr) return;
+                const refPose = JSON.parse(refPoseStr);
+                
+                // Compare MediaPipe left wrist height to reference arm rotation
+                const lw = STATE.latestLandmarks[15];
+                if (!lw) return;
+
+                // Simple mock comparison
+                const userArmMockRot = (lw.y + 0.5) * -100; 
+                const diff = Math.abs(userArmMockRot - refPose.leftArmRot);
+                
+                let fbText = "", fbColor = "";
+                // Using respectful/educational feedback per project constraints
+                if (diff < 20) { fbText = "Excellent Alignment!"; fbColor = "#4CAF50"; }
+                else if (diff < 50) { fbText = "Good Timing"; fbColor = "#2196F3"; }
+                else { fbText = "Match Master's Rhythm"; fbColor = "#FF9800"; }
+                
+                const floatingText = document.createElement('a-text');
+                floatingText.setAttribute('value', fbText);
+                floatingText.setAttribute('color', fbColor);
+                floatingText.setAttribute('scale', '0.5 0.5 0.5');
+                floatingText.setAttribute('align', 'center');
+                floatingText.setAttribute('position', `${(Math.random() - 0.5)*2} 3 -6`); // Spawn above user
+                floatingText.setAttribute('animation__up', 'property: position; by: 0 1.5 0; dur: 2000; easing: linear');
+                floatingText.setAttribute('animation__fade', 'property: opacity; to: 0; dur: 2000; easing: linear');
+                this.el.appendChild(floatingText);
+                
+                setTimeout(() => { if(floatingText.parentNode) floatingText.parentNode.removeChild(floatingText); }, 2000);
+                this.lastFeedbackTime = time;
+            }
+        });
+
+        // User's Ghost Guru (MediaPipe Mirror)
+        AFRAME.registerComponent('ghost-guru-tracker', {
+            init: function() {
+                this.joints = {};
+                const trackedLandmarks = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28, 0]; 
+                trackedLandmarks.forEach(idx => {
+                    const joint = document.createElement('a-sphere'); joint.setAttribute('radius', '0.08'); joint.setAttribute('material', 'color: #00FFCC; transparent: true; opacity: 0.8; wireframe: true');
+                    this.el.appendChild(joint); this.joints[idx] = joint;
+                });
+            },
+            tick: function() {
+                if (!STATE.isPracticing || !STATE.latestLandmarks) return;
+                const lms = STATE.latestLandmarks; const scale = 1.2; 
+                Object.keys(this.joints).forEach(key => {
+                    const idx = parseInt(key); const lm = lms[idx];
+                    if (lm && lm.visibility > 0.5) {
+                        const x = -lm.x * scale, y = -lm.y * scale + 1.2, z = -lm.z * scale;
+                        this.joints[key].setAttribute('position', `${x} ${y} ${z}`);
+                        this.joints[key].setAttribute('visible', 'true');
+                    } else { this.joints[key].setAttribute('visible', 'false'); }
+                });
+            }
+        });
+
+        AFRAME.registerComponent('practice-manager', {
+            init: function() {
+                this.el.addEventListener('start-practice', () => {
+                    STATE.isPracticing = !STATE.isPracticing;
+                    this.el.querySelector('a-text').setAttribute('value', STATE.isPracticing ? "Stop Practice" : "Start Practice\n(Webcam Req)");
+                    const music = document.getElementById('practice-music');
+                    
+                    if(STATE.isPracticing) {
+                        AIPipeline.startTracking();
+                        if(music) music.components.sound.playSound();
+                    } else { 
+                        AIPipeline.stopTracking(); 
+                        STATE.latestLandmarks = null; 
+                        if(music) music.components.sound.stopSound();
+                    }
+                });
+                this.el.sceneEl.addEventListener('stop-practice', () => { if (STATE.isPracticing) this.el.emit('start-practice'); });
+            }
+        });
+
+        AFRAME.registerComponent('vr-button', {
+            schema: { text: {type: 'string'}, event: {type: 'string'}, color: {type: 'color', default: '#333'} },
+            init: function () {
+                const el = this.el; const data = this.data;
+                el.setAttribute('geometry', 'primitive: plane; width: 1.5; height: 0.5'); el.setAttribute('material', `color: ${data.color}; shader: flat; transparent: true; opacity: 0.8`); el.classList.add('clickable');
+                const textEl = document.createElement('a-text'); textEl.setAttribute('value', data.text); textEl.setAttribute('align', 'center'); textEl.setAttribute('position', '0 0 0.01'); textEl.setAttribute('color', '#FFFFFF'); textEl.setAttribute('scale', '0.6 0.6 0.6'); el.appendChild(textEl);
+                el.addEventListener('mouseenter', () => { el.setAttribute('scale', '1.1 1.1 1.1'); el.setAttribute('material', 'opacity', '1.0'); });
+                el.addEventListener('mouseleave', () => { el.setAttribute('scale', '1 1 1'); el.setAttribute('material', 'opacity', '0.8'); });
+                el.addEventListener('click', () => { if (data.event) el.sceneEl.emit(data.event); });
+            }
+        });
+
+    </script>
+</head>
+<body>
+
+    <div id="loading-screen" aria-live="polite">
+        <div class="loading-card">
+            <div class="loading-mark" aria-hidden="true"></div>
+            <p class="loading-title">Nritya Katha</p>
+            <p class="loading-status">Preparing the museum...</p>
+        </div>
+    </div>
+
+    <div class="webcam-container"><video id="input_video" autoplay playsinline></video></div>
+
+    <a-scene scene-manager background="color: #05050A" fog="type: exponential; color: #05050A; density: 0.02">
+        
+        <a-assets timeout="2500">
+            <mixin id="wall-panel" geometry="primitive: plane; width: 2; height: 1.5" material="color: #0A0A0F; opacity: 0.9; transparent: true"></mixin>
+            <mixin id="golden-ring" geometry="primitive: torus; radius: 1; tube: 0.03" material="color: #D4AF37; metalness: 0.9; roughness: 0.1"></mixin>
+            <a-mixin id="wall-section" material="src: #tex-wall; repeat: 1 2; roughness: 0.8"></a-mixin>
+            
+            <!-- GRAND ARCHITECTURE MIXINS -->
+            <a-mixin id="grand-pillar" geometry="primitive: cylinder; radius: 0.2; height: 5.8" material="src: #tex-marble; roughness: 0.1"></a-mixin>
+            <a-mixin id="pillar-base" geometry="primitive: cylinder; radius: 0.3; height: 0.4" material="color: #D4AF37; metalness: 0.8; roughness: 0.2"></a-mixin>
+            
+            <!-- TEXTURES & MODELS -->
+            <img id="tex-marble" src="assets/marble_floor.jpg">
+            <img id="tex-wall" src="assets/palace_wall.jpg">
+            <img id="tex-carpet" src="assets/ornate_carpet.jpg">
+            <a-asset-item id="dummy-model" src="https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/CesiumMan/glTF/CesiumMan.gltf"></a-asset-item>
+            <audio id="ambient-track" src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" preload="auto" loop></audio>
+            <audio id="practice-track" src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3" preload="auto" loop></audio>
+        </a-assets>
+
+        <!-- ENHANCED LIGHTING FOR BETTER VISIBILITY -->
+        <a-entity light="type: ambient; color: #FFF; intensity: 0.4"></a-entity>
+        
+        <!-- PLAYER RIG -->
+        <a-entity id="rig" position="0 0 0" rhythm-coach>
+            <a-camera position="0 1.6 0" wasd-controls="acceleration: 20" look-controls="pointerLockEnabled: true">
+                <a-cursor color="#D4AF37" raycaster="objects: .clickable; far: 10"></a-cursor>
+                <a-sphere id="fade-sphere" radius="0.1" color="#000" material="transparent: true; opacity: 0; side: double; shader: flat" position="0 0 0"
+                    animation__fadeout="property: material.opacity; from: 0; to: 1; dur: 400; easing: linear; startEvents: fadeout"
+                    animation__fadein="property: material.opacity; from: 1; to: 0; dur: 400; easing: linear; startEvents: fadein">
+                </a-sphere>
+            </a-camera>
+            <a-entity laser-controls="hand: left" raycaster="objects: .clickable; far: 10"></a-entity>
+            <a-entity laser-controls="hand: right" raycaster="objects: .clickable; far: 10"></a-entity>
+        </a-entity>
+
+
+        <!-- ========================================== -->
+        <!-- 8-ROOM VIRTUAL CULTURAL MUSEUM             -->
+        <!-- ========================================== -->
+        <a-entity id="museum-complex">
+            <!-- Global Foundation -->
+            <a-plane position="0 -0.01 0" rotation="-90 0 0" width="100" height="100" material="src: #tex-marble; repeat: 40 40; roughness: 0.2; metalness: 0.1"></a-plane>
+            
+            <!-- CENTRAL HUB (Room 1: Origins) -->
+            <a-entity id="central-hub" position="0 0 0">
+                <a-light type="point" intensity="1.2" distance="25" color="#E8D5B5" position="0 4 0"></a-light>
+                <a-sound src="#ambient-track" autoplay="true" loop="true" volume="0.1" position="0 2 0"></a-sound>
+                
+                <!-- Grand Ceiling & Floor -->
+                <a-cylinder radius="5.4" height="0.5" segments-radial="8" position="0 6 0" material="src: #tex-wall; repeat: 4 1"></a-cylinder>
+                <a-circle radius="4.5" rotation="-90 0 0" position="0 0.001 0" material="src: #tex-carpet; repeat: 1 1; roughness: 0.9"></a-circle>
+                <a-ring radius-inner="4.5" radius-outer="4.7" rotation="-90 0 0" position="0 0.002 0" material="color: #D4AF37; metalness: 0.8"></a-ring>
+
+                <a-text value="Nritya Katha\nCultural Hub" align="center" position="0 3.5 -4" scale="1.5 1.5 1.5" color="#D4AF37"></a-text>
+                
+                <a-entity position="0 0.5 0">
+                    <a-cylinder radius="0.5" height="1" material="color: #1A1A24; metalness: 0.3; roughness: 0.7"></a-cylinder>
+                    <a-entity position="0 1.2 0" animation="property: rotation; to: 0 360 0; loop: true; dur: 20000; easing: linear">
+                        <a-entity mixin="golden-ring"></a-entity>
+                        <a-cone radius-bottom="0.2" radius-top="0" height="0.8" color="#8B5A2B"></a-cone>
+                    </a-entity>
+                </a-entity>
+
+                <a-box width="4.2" height="4" depth="0.2" position="0 2 -5" mixin="wall-section"></a-box>
+                
+                <!-- Walls 1-7 with Doors -->
+                <a-entity rotation="0 45 0"><a-entity position="0 0 -5"><a-box width="1.3" height="6" depth="0.2" position="-1.45 3 0" mixin="wall-section"></a-box><a-box width="1.3" height="6" depth="0.2" position="1.45 3 0" mixin="wall-section"></a-box><a-box width="1.6" height="3.5" depth="0.2" position="0 4.25 0" mixin="wall-section"></a-box><a-entity room-portal="targetPosition: -15 0 -15; label: Enter Instruments"></a-entity></a-entity></a-entity>
+                <a-entity rotation="0 -45 0"><a-entity position="0 0 -5"><a-box width="1.3" height="6" depth="0.2" position="-1.45 3 0" mixin="wall-section"></a-box><a-box width="1.3" height="6" depth="0.2" position="1.45 3 0" mixin="wall-section"></a-box><a-box width="1.6" height="3.5" depth="0.2" position="0 4.25 0" mixin="wall-section"></a-box><a-entity room-portal="targetPosition: 15 0 -15; label: Enter Costumes"></a-entity></a-entity></a-entity>
+                <a-entity rotation="0 -90 0"><a-entity position="0 0 -5"><a-box width="1.3" height="6" depth="0.2" position="-1.45 3 0" mixin="wall-section"></a-box><a-box width="1.3" height="6" depth="0.2" position="1.45 3 0" mixin="wall-section"></a-box><a-box width="1.6" height="3.5" depth="0.2" position="0 4.25 0" mixin="wall-section"></a-box><a-entity room-portal="targetPosition: 20 0 0; label: Enter Dance Forms"></a-entity></a-entity></a-entity>
+                <a-entity rotation="0 90 0"><a-entity position="0 0 -5"><a-box width="1.3" height="6" depth="0.2" position="-1.45 3 0" mixin="wall-section"></a-box><a-box width="1.3" height="6" depth="0.2" position="1.45 3 0" mixin="wall-section"></a-box><a-box width="1.6" height="3.5" depth="0.2" position="0 4.25 0" mixin="wall-section"></a-box><a-entity room-portal="targetPosition: -20 0 0; label: Enter Stories"></a-entity></a-entity></a-entity>
+                <a-entity rotation="0 -135 0"><a-entity position="0 0 -5"><a-box width="1.3" height="6" depth="0.2" position="-1.45 3 0" mixin="wall-section"></a-box><a-box width="1.3" height="6" depth="0.2" position="1.45 3 0" mixin="wall-section"></a-box><a-box width="1.6" height="3.5" depth="0.2" position="0 4.25 0" mixin="wall-section"></a-box><a-entity room-portal="targetPosition: 15 0 15; label: Enter Masters"></a-entity></a-entity></a-entity>
+                <a-entity rotation="0 135 0"><a-entity position="0 0 -5"><a-box width="1.3" height="6" depth="0.2" position="-1.45 3 0" mixin="wall-section"></a-box><a-box width="1.3" height="6" depth="0.2" position="1.45 3 0" mixin="wall-section"></a-box><a-box width="1.6" height="3.5" depth="0.2" position="0 4.25 0" mixin="wall-section"></a-box><a-entity room-portal="targetPosition: -15 0 15; label: Enter Movements"></a-entity></a-entity></a-entity>
+                <a-entity rotation="0 180 0"><a-entity position="0 0 -5"><a-box width="1.3" height="6" depth="0.2" position="-1.45 3 0" mixin="wall-section"></a-box><a-box width="1.3" height="6" depth="0.2" position="1.45 3 0" mixin="wall-section"></a-box><a-box width="1.6" height="3.5" depth="0.2" position="0 4.25 0" mixin="wall-section"></a-box><a-entity room-portal="targetPosition: 0 0 30; label: Enter Practice Studio; doorColor: #1E3A8A"></a-entity></a-entity></a-entity>
+                
+                <!-- 8 Grand Pillars at Octagon Corners -->
+                <!-- Angles: 22.5, 67.5, 112.5, 157.5, 202.5, 247.5, 292.5, 337.5 -->
+                <a-entity rotation="0 22.5 0"><a-entity position="0 0 -5.41"><a-entity mixin="pillar-base" position="0 0.2 0"></a-entity><a-entity mixin="grand-pillar" position="0 3.1 0"></a-entity><a-entity mixin="pillar-base" position="0 5.8 0"></a-entity></a-entity></a-entity>
+                <a-entity rotation="0 67.5 0"><a-entity position="0 0 -5.41"><a-entity mixin="pillar-base" position="0 0.2 0"></a-entity><a-entity mixin="grand-pillar" position="0 3.1 0"></a-entity><a-entity mixin="pillar-base" position="0 5.8 0"></a-entity></a-entity></a-entity>
+                <a-entity rotation="0 112.5 0"><a-entity position="0 0 -5.41"><a-entity mixin="pillar-base" position="0 0.2 0"></a-entity><a-entity mixin="grand-pillar" position="0 3.1 0"></a-entity><a-entity mixin="pillar-base" position="0 5.8 0"></a-entity></a-entity></a-entity>
+                <a-entity rotation="0 157.5 0"><a-entity position="0 0 -5.41"><a-entity mixin="pillar-base" position="0 0.2 0"></a-entity><a-entity mixin="grand-pillar" position="0 3.1 0"></a-entity><a-entity mixin="pillar-base" position="0 5.8 0"></a-entity></a-entity></a-entity>
+                <a-entity rotation="0 202.5 0"><a-entity position="0 0 -5.41"><a-entity mixin="pillar-base" position="0 0.2 0"></a-entity><a-entity mixin="grand-pillar" position="0 3.1 0"></a-entity><a-entity mixin="pillar-base" position="0 5.8 0"></a-entity></a-entity></a-entity>
+                <a-entity rotation="0 247.5 0"><a-entity position="0 0 -5.41"><a-entity mixin="pillar-base" position="0 0.2 0"></a-entity><a-entity mixin="grand-pillar" position="0 3.1 0"></a-entity><a-entity mixin="pillar-base" position="0 5.8 0"></a-entity></a-entity></a-entity>
+                <a-entity rotation="0 292.5 0"><a-entity position="0 0 -5.41"><a-entity mixin="pillar-base" position="0 0.2 0"></a-entity><a-entity mixin="grand-pillar" position="0 3.1 0"></a-entity><a-entity mixin="pillar-base" position="0 5.8 0"></a-entity></a-entity></a-entity>
+                <a-entity rotation="0 337.5 0"><a-entity position="0 0 -5.41"><a-entity mixin="pillar-base" position="0 0.2 0"></a-entity><a-entity mixin="grand-pillar" position="0 3.1 0"></a-entity><a-entity mixin="pillar-base" position="0 5.8 0"></a-entity></a-entity></a-entity>
+            </a-entity>
+
+            <!-- ROOM ENCLOSURES -->
+            <!-- Rooms are fully enclosed: user spawns at 0,0,0 local, walls surround them, door is behind them -->
+            
+            <a-entity position="-15 0 -15" rotation="0 45 0"><a-light type="point" intensity="1" distance="15" color="#FFF" position="0 3 0"></a-light><a-box width="8" height="5" depth="8" position="0 2.5 0" material="src: #tex-wall; repeat: 4 2.5; side: back"></a-box><a-plane width="7.8" height="7.8" rotation="-90 0 0" position="0 0.01 0" material="src: #tex-carpet"></a-plane><a-entity room-portal="targetPosition: 0 0 0; label: Return to Hub" position="0 0 3.9" rotation="0 180 0"></a-entity><a-entity position="0 0 -2"><a-entity mixin="wall-panel" position="0 2 0"></a-entity><a-text value="Instruments\nThe Rhythm" align="center" position="0 2.2 0.01" scale="0.6 0.6 0.6" color="#D4AF37"></a-text><a-entity position="0 0.25 0.5"><a-cylinder radius="0.3" height="0.5" color="#5C3A21" position="-0.4 0 0"></a-cylinder><a-cylinder radius="0.25" height="0.6" color="#5C3A21" position="0.4 0 0"></a-cylinder></a-entity></a-entity></a-entity>
+            <a-entity position="15 0 -15" rotation="0 -45 0"><a-light type="point" intensity="1" distance="15" color="#FFF" position="0 3 0"></a-light><a-box width="8" height="5" depth="8" position="0 2.5 0" material="src: #tex-wall; repeat: 4 2.5; side: back"></a-box><a-plane width="7.8" height="7.8" rotation="-90 0 0" position="0 0.01 0" material="src: #tex-carpet"></a-plane><a-entity room-portal="targetPosition: 0 0 0; label: Return to Hub" position="0 0 3.9" rotation="0 180 0"></a-entity><a-entity position="0 0 -2"><a-entity mixin="wall-panel" position="0 2 0"></a-entity><a-text value="Costumes\nThe Attire" align="center" position="0 2.2 0.01" scale="0.6 0.6 0.6" color="#D4AF37"></a-text><a-entity position="0 0 0.5"><a-gltf-model src="#dummy-model" position="0 0 0" scale="1 1 1"></a-gltf-model></a-entity></a-entity></a-entity>
+            <a-entity position="20 0 0" rotation="0 -90 0"><a-light type="point" intensity="1" distance="15" color="#FFF" position="0 3 0"></a-light><a-box width="8" height="5" depth="8" position="0 2.5 0" material="src: #tex-wall; repeat: 4 2.5; side: back"></a-box><a-plane width="7.8" height="7.8" rotation="-90 0 0" position="0 0.01 0" material="src: #tex-carpet"></a-plane><a-entity room-portal="targetPosition: 0 0 0; label: Return to Hub" position="0 0 3.9" rotation="0 180 0"></a-entity><a-entity position="0 0 -2"><a-entity mixin="wall-panel" position="0 2 0"></a-entity><a-text value="Dance Forms\nThe Styles" align="center" position="0 2.2 0.01" scale="0.6 0.6 0.6" color="#D4AF37"></a-text><a-entity position="0 1 0.5" animation="property: position; dir: alternate; to: 0 1.2 0.5; loop: true; dur: 2000"><a-octahedron radius="0.5" color="#00BCD4" material="wireframe: true; wireframeLinewidth: 2"></a-octahedron><a-sphere radius="0.2" color="#FFFFFF"></a-sphere></a-entity></a-entity></a-entity>
+            <a-entity position="-20 0 0" rotation="0 90 0"><a-light type="point" intensity="1" distance="15" color="#FFF" position="0 3 0"></a-light><a-box width="8" height="5" depth="8" position="0 2.5 0" material="src: #tex-wall; repeat: 4 2.5; side: back"></a-box><a-plane width="7.8" height="7.8" rotation="-90 0 0" position="0 0.01 0" material="src: #tex-carpet"></a-plane><a-entity room-portal="targetPosition: 0 0 0; label: Return to Hub" position="0 0 3.9" rotation="0 180 0"></a-entity><a-entity position="0 0 -2"><a-entity mixin="wall-panel" position="0 2 0"></a-entity><a-text value="Stories\nThe Myths" align="center" position="0 2.2 0.01" scale="0.6 0.6 0.6" color="#D4AF37"></a-text><a-entity position="0 0.5 0.5"><a-box width="1.5" height="0.1" depth="1" color="#2E7D32"></a-box><a-cone radius-bottom="0.2" height="0.6" position="-0.4 0.3 0" color="#1B5E20"></a-cone><a-cone radius-bottom="0.15" height="0.4" position="0.3 0.2 -0.2" color="#1B5E20"></a-cone></a-entity></a-entity></a-entity>
+            <a-entity position="15 0 15" rotation="0 -135 0"><a-light type="point" intensity="1" distance="15" color="#FFF" position="0 3 0"></a-light><a-box width="8" height="5" depth="8" position="0 2.5 0" material="src: #tex-wall; repeat: 4 2.5; side: back"></a-box><a-plane width="7.8" height="7.8" rotation="-90 0 0" position="0 0.01 0" material="src: #tex-carpet"></a-plane><a-entity room-portal="targetPosition: 0 0 0; label: Return to Hub" position="0 0 3.9" rotation="0 180 0"></a-entity><a-entity position="0 0 -2"><a-entity mixin="wall-panel" position="0 2 0"></a-entity><a-text value="Masters\nThe Lineage" align="center" position="0 2.2 0.01" scale="0.6 0.6 0.6" color="#D4AF37"></a-text><a-entity position="0 0.5 0.5"><a-box width="0.4" height="1" depth="0.4" color="#424242"></a-box><a-sphere radius="0.25" position="0 0.6 0" color="#BDBDBD"></a-sphere></a-entity></a-entity></a-entity>
+            <a-entity position="-15 0 15" rotation="0 135 0"><a-light type="point" intensity="1" distance="15" color="#FFF" position="0 3 0"></a-light><a-box width="8" height="5" depth="8" position="0 2.5 0" material="src: #tex-wall; repeat: 4 2.5; side: back"></a-box><a-plane width="7.8" height="7.8" rotation="-90 0 0" position="0 0.01 0" material="src: #tex-carpet"></a-plane><a-entity room-portal="targetPosition: 0 0 0; label: Return to Hub" position="0 0 3.9" rotation="0 180 0"></a-entity><a-entity position="0 0 -2"><a-entity mixin="wall-panel" position="0 2 0"></a-entity><a-text value="Movements\nThe Architecture" align="center" position="0 2.2 0.01" scale="0.6 0.6 0.6" color="#D4AF37"></a-text><a-entity position="0 1.2 0.5"><a-sphere radius="0.1" position="-0.4 0 0" color="#00FFCC"></a-sphere><a-cylinder radius="0.02" height="0.8" position="0 0 0" rotation="0 0 90" color="#FFF"></a-cylinder><a-sphere radius="0.1" position="0.4 0 0" color="#00FFCC"></a-sphere></a-entity></a-entity></a-entity>
+
+            <!-- Room 8: STUDIO SCENE (0 0 30) -->
+            <a-entity position="0 0 30" rotation="0 180 0">
+                <!-- Fully Enclosed Grand Studio -->
+                <a-light type="point" intensity="1.2" distance="20" color="#FFF" position="0 5 -5"></a-light>
+                <a-sound id="practice-music" src="#practice-track" autoplay="false" loop="true" volume="0.6" position="0 2 -5"></a-sound>
+                <a-box width="12" height="6" depth="12" position="0 3 0" material="color: #05050A; side: back"></a-box>
+                
+                <!-- Floor -->
+                <a-plane position="0 0.01 0" rotation="-90 0 0" width="11.8" height="11.8" material="color: #3E2723; roughness: 0.9"></a-plane>
+                
+                <!-- Return Portal directly behind the spawn point -->
+                <a-entity room-portal="targetPosition: 0 0 0; label: Return to Museum Hub; doorColor: #4A148C" position="0 0 5.9" rotation="0 180 0"></a-entity>
+                
+                <!-- Mirror Wall is far in front -->
+                <a-entity position="0 2.5 -5.9">
+                    <a-plane width="8" height="5" material="color: #88CCFF; metalness: 0.9; roughness: 0.1; opacity: 0.5"></a-plane>
+                    <a-box width="8.2" height="5.2" depth="0.1" position="0 0 -0.06" color="#111"></a-box>
+                </a-entity>
+
+                <a-entity position="-3 2 -8" rotation="0 20 0">
+                    <a-entity mixin="wall-panel"></a-entity>
+                    <a-text value="Movement: Basic Tatkar\nMode: Match the Master" align="center" position="0 0 0.01" scale="0.4 0.4 0.4"></a-text>
+                </a-entity>
+
+                <!-- VIRTUAL MASTER (AI Dancer) -->
+                <!-- The master is placed to the side so the player can watch and follow -->
+                <a-entity position="-2 0 -7">
+                    <a-text value="VIRTUAL MASTER" align="center" position="0 2.2 0" scale="0.4 0.4 0.4" color="#1E88E5"></a-text>
+                    <a-entity id="ref-master" position="0 1 0" reference-dancer></a-entity>
+                </a-entity>
+
+                <!-- PLAYER GHOST GURU (MediaPipe Mirror) -->
+                <a-entity position="2 0 -7">
+                    <a-text value="YOUR GHOST GURU" align="center" position="0 2.5 0" scale="0.4 0.4 0.4" color="#00FFCC"></a-text>
+                    <a-entity id="ghost-guru-rig" ghost-guru-tracker></a-entity>
+                </a-entity>
+
+                <a-entity id="practice-button" position="0 1 -5.5" practice-manager>
+                    <a-entity vr-button="text: Start Practice (Webcam Req); event: start-practice; color: #1B5E20" position="0 0 0"></a-entity>
+                </a-entity>
+
+                <a-circle radius="1" position="-2 0.01 -7" rotation="-90 0 0" material="color: #1E88E5; transparent: true; opacity: 0.2; wireframe: true"></a-circle>
+                <a-circle radius="1" position="2 0.01 -7" rotation="-90 0 0" material="color: #00FFCC; transparent: true; opacity: 0.2; wireframe: true"></a-circle>
+                <a-circle radius="1" position="0 0.01 -4" rotation="-90 0 0" material="color: #D4AF37; transparent: true; opacity: 0.2; wireframe: true"></a-circle>
+            </a-entity>
+
+        </a-entity>
+
+    </a-scene>
+</body>
+</html>

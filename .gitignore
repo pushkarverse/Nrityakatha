@@ -1,0 +1,5 @@
+# Project documentation
+/doc/
+
+# JSON configuration files
+*.json
