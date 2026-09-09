@@ -18,6 +18,8 @@
         .loading-mark { width: 56px; height: 56px; margin: 0 auto 18px; border: 2px solid rgba(245, 217, 138, 0.3); border-top-color: #f5d98a; border-radius: 50%; animation: loading-spin 1s linear infinite; }
         .loading-title { margin: 0; font-size: 26px; letter-spacing: 0.04em; }
         .loading-status { margin: 8px 0 0; color: #c4d6d8; font: 13px sans-serif; }
+        #vr-help { position: fixed; left: 50%; bottom: 24px; z-index: 15; display: none; width: min(88vw, 420px); transform: translateX(-50%); padding: 14px 18px; border: 1px solid rgba(245, 217, 138, 0.6); border-radius: 8px; background: rgba(7, 21, 29, 0.94); color: #f5d98a; text-align: center; font: 14px sans-serif; }
+        #vr-help.is-visible { display: block; }
         @keyframes loading-spin { to { transform: rotate(360deg); } }
     </style>
 
@@ -54,8 +56,14 @@
         document.addEventListener('DOMContentLoaded', function() {
             const scene = document.querySelector('a-scene');
             const loadingScreen = document.getElementById('loading-screen');
+            const vrHelp = document.getElementById('vr-help');
             const hideLoadingScreen = () => loadingScreen.classList.add('is-hidden');
             scene.addEventListener('loaded', hideLoadingScreen, {once: true});
+            scene.addEventListener('enter-vr-error', () => {
+                vrHelp.textContent = 'VR could not start. Close other permission dialogs or overlays, then tap the VR button again. For phone viewers, use a WebXR-compatible browser and headset.';
+                vrHelp.classList.add('is-visible');
+            });
+            scene.addEventListener('enter-vr', () => vrHelp.classList.remove('is-visible'));
             setTimeout(hideLoadingScreen, 6000);
         });
 
@@ -250,7 +258,9 @@
 
     <div class="webcam-container"><video id="input_video" autoplay playsinline></video></div>
 
-    <a-scene scene-manager background="color: #05050A" fog="type: exponential; color: #05050A; density: 0.02">
+    <div id="vr-help" role="alert"></div>
+
+    <a-scene scene-manager webxr="referenceSpaceType: local-floor; optionalFeatures: local-floor, bounded-floor" background="color: #05050A" fog="type: exponential; color: #05050A; density: 0.02">
         
         <a-assets timeout="2500">
             <mixin id="wall-panel" geometry="primitive: plane; width: 2; height: 1.5" material="color: #0A0A0F; opacity: 0.9; transparent: true"></mixin>
